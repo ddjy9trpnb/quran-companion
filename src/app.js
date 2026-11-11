@@ -7,6 +7,7 @@ const assetUrl = (path) => `${import.meta.env.BASE_URL}${path}`;
 const surahSelect = $("#surahSelect");
 const ayahSelect = $("#ayahSelect");
 const quranText = $("#quranText");
+const audioPlayer = $("#audioPlayer");
 const setupMessage = $("#setupMessage");
 const startButton = $("#startButton");
 const stopButton = $("#stopButton");
@@ -21,6 +22,13 @@ let gain;
 let active = false;
 let lastVerse = 0;
 let audioQueue = Promise.resolve();
+let reviewEvents = [];
+let reviewIssueKeys = new Set();
+let detectedVerses = [];
+let finalTranscript = "";
+let audioSequence = [];
+let audioSequenceIndex = 0;
+let audioActive = false;
 
 const ar = (n) => Number(n).toLocaleString("ar");
 const surahNames = ["النبأ","النازعات","عبس","التكوير","الانفطار","المطففين","الانشقاق","البروج","الطارق","الأعلى","الغاشية","الفجر","البلد","الشمس","الليل","الضحى","الشرح","التين","العلق","القدر","البينة","الزلزلة","العاديات","القارعة","التكاثر","العصر","الهمزة","الفيل","قريش","الماعون","الكوثر","الكافرون","النصر","المسد","الإخلاص","الفلق","الناس"];
@@ -76,30 +84,99 @@ function renderVerses() {
   quranText.classList.toggle("quran-hidden", $("#hideVerses").checked);
 }
 
-surahSelect.addEventListener("change", fillAyahs);
-ayahSelect.addEventListener("change", renderVerses);
+surahSelect.addEventListener("change", () => { stopAudioSequence(); fillAyahs(); });
+ayahSelect.addEventListener("change", () => { stopAudioSequence(); renderVerses(); });
 $("#hideVerses").addEventListener("change", renderVerses);
 
 function showEvent(event) {
+  reviewEvents.push(event);
   if (event.type === "verse_match") {
     if (event.surah === Number(surahSelect.value)) {
       lastVerse = event.ayah;
+      if (!detectedVerses.length || detectedVerses.at(-1).ayah !== event.ayah) detectedVerses.push({ surah: event.surah, ayah: event.ayah, confidence: event.confidence });
       $("#position").textContent = `الآية ${ar(event.ayah)}`;
-      status.textContent = `تم التعرف على الآية ${ar(event.ayah)}.`;
-      if (event.ayah > Number(ayahSelect.value)) feedback.textContent = `انتقل التعرف إلى الآية ${ar(event.ayah)}؛ راجع الآيات السابقة للتأكد من عدم سقوط آية.`;
-      else feedback.textContent = `تلاوتك تطابق موضعًا من سورة ${surahNames[event.surah - 78]}.`;
+      if (active) status.textContent = `أتابع تلاوتك · وصلت إلى الآية ${ar(event.ayah)}.`;
     }
   } else if (event.type === "word_progress" && event.surah === Number(surahSelect.value)) {
     $("#position").textContent = `الآية ${ar(event.ayah)} · الكلمة ${ar(event.word_index || 1)}`;
-  } else if (event.type === "possible_omission") {
-    feedback.textContent = `احتمال سقوط كلمة في الآية ${ar(event.ayah || lastVerse)}. أعدها بهدوء للمراجعة.`;
-  } else if (event.type === "possible_substitution") {
-    feedback.textContent = `احتمال اختلاف كلمة في الآية ${ar(event.ayah || lastVerse)}. راجع النص ثم أعد التلاوة.`;
-  } else if (event.type === "possible_skipped_ayah") {
-    feedback.textContent = `احتمال تجاوز آية قرب الآية ${ar(event.ayah || lastVerse)}. راجع تسلسل الآيات.`;
+  } else if (event.type === "final_sequence" && Array.isArray(event.verses)) {
+    detectedVerses = event.verses.filter((item) => item.surah === Number(surahSelect.value));
+  } else if (event.type === "correction_note" && event.issue) {
+    rememberIssue(event.issue);
+  } else if (event.type === "correction" && event.state?.issue) {
+    rememberIssue(event.state.issue);
+    // Continue listening without interrupting; include this possible issue in the end report.
+    if (event.state.phase === "error") {
+      try {
+        const continuation = session?.zipformer?.correct?.("continue");
+        if (continuation?.catch) continuation.catch(() => {});
+      } catch { /* Keep the recitation running if this SDK version has no continue action. */ }
+    }
+  } else if (event.type?.startsWith("possible_")) {
+    rememberIssue(event);
   } else if (event.type === "raw_transcript" && event.text) {
-    $("#transcript").textContent = `التعرف الصوتي: ${event.text}`;
+    finalTranscript = event.text;
   }
+}
+
+function rememberIssue(issue) {
+  const key = `${issue.kind || issue.type}:${issue.surah || surahSelect.value}:${issue.ayah || lastVerse}:${issue.word ?? issue.wordIndex ?? ""}`;
+  if (reviewIssueKeys.has(key)) return;
+  reviewIssueKeys.add(key);
+  reviewEvents.push({ type: "review_issue", issue: { ...issue } });
+}
+
+function issueLabel(issue) {
+  const kind = issue.kind || issue.type;
+  const labels = {
+    possible_omission: "احتمال سقوط كلمة",
+    possible_substitution: "احتمال اختلاف كلمة",
+    possible_vowel: "احتمال اختلاف حركة",
+    possible_repetition: "احتمال تكرار كلمة",
+    possible_skipped_ayah: "احتمال تجاوز آية",
+    unclear_ayah: "لم أتمكن من التحقق من آية",
+  };
+  const ayah = Number(issue.ayah || lastVerse);
+  const rawWord = issue.word;
+  const word = rawWord !== undefined && rawWord !== null && Number.isFinite(Number(rawWord)) ? `، قرب الكلمة ${ar(Number(rawWord) + 1)}` : "";
+  let message = `${labels[kind] || "ملاحظة تحتاج مراجعة"} في الآية ${ar(ayah)}${word}`;
+  if (["possible_omission", "possible_substitution", "possible_vowel"].includes(kind) && rawWord !== undefined && rawWord !== null) {
+    const verseText = juz.get(Number(issue.surah || surahSelect.value))?.find((item) => item.number === ayah)?.text;
+    const expectedWord = verseText?.trim().split(/\s+/u)[Number(rawWord)];
+    if (expectedWord) message += ` — الكلمة حسب النص: ${expectedWord}`;
+  }
+  return message;
+}
+
+function renderReview() {
+  const items = $("#reviewItems");
+  items.replaceChildren();
+  const selectedSurah = Number(surahSelect.value);
+  const startAyah = Number(ayahSelect.value);
+  const verses = detectedVerses.filter((item) => item.surah === selectedSurah);
+  const issues = reviewEvents.filter((event) => event.type === "review_issue").map((event) => event.issue);
+  const inferredGaps = [];
+  if (verses.length) {
+    if (verses[0].ayah > startAyah) inferredGaps.push(...Array.from({ length: verses[0].ayah - startAyah }, (_, i) => startAyah + i));
+    for (let i = 1; i < verses.length; i += 1) {
+      for (let ayah = verses[i - 1].ayah + 1; ayah < verses[i].ayah; ayah += 1) inferredGaps.push(ayah);
+    }
+  }
+  const warnings = [...issues.map(issueLabel), ...[...new Set(inferredGaps)].map((ayah) => `احتمال عدم قراءة الآية ${ar(ayah)}؛ راجع التسلسل.`)];
+  if (warnings.length) {
+    $("#feedback").textContent = `انتهت القراءة. رصدت ${ar(warnings.length)} ملاحظة محتملة؛ راجعها بهدوء مع النص:`;
+    for (const warning of warnings) { const li = document.createElement("li"); li.textContent = warning; items.append(li); }
+    items.hidden = false;
+  } else if (verses.length) {
+    $("#feedback").textContent = `انتهت القراءة. تعرّف النموذج على ${ar(verses.length)} آية، ولم يرصد تنبيهًا واضحًا. هذا تقدير آلي ولا يؤكد صحة كل كلمة أو أحكام التجويد.`;
+    items.hidden = true;
+  } else {
+    $("#feedback").textContent = "انتهت القراءة، لكن النموذج لم يتعرف على آيات كافية لإعطاء مراجعة موثوقة. جرّب القراءة قريبًا من الميكروفون وبصوت أوضح.";
+    items.hidden = true;
+  }
+  $("#transcript").textContent = verses.length
+    ? `الآيات التي تعرف عليها النموذج: ${verses.map((item) => ar(item.ayah)).join("، ")}${finalTranscript ? `\nالتفريغ الصوتي التقريبي: ${finalTranscript}` : ""}`
+    : finalTranscript ? `التفريغ الصوتي التقريبي: ${finalTranscript}` : "";
 }
 
 async function ensureModel() {
@@ -138,9 +215,16 @@ async function begin() {
     await ensureModel();
     const surah = Number(surahSelect.value);
     const ayah = Number(ayahSelect.value);
-    session.zipformer?.setExpected({ surah, ayah, ayahEnd: juz.get(surah).at(-1).number });
     session.reset();
-    feedback.textContent = "ابدأ القراءة بصوت واضح. تتم المعالجة على هذا الجهاز.";
+    session.zipformer?.setMode("correction");
+    session.zipformer?.setExpected({ surah, ayah, ayahEnd: juz.get(surah).at(-1).number });
+    reviewEvents = [];
+    reviewIssueKeys = new Set();
+    detectedVerses = [];
+    finalTranscript = "";
+    $("#reviewItems").replaceChildren();
+    $("#reviewItems").hidden = true;
+    feedback.textContent = "أقرأ الآن بصمت؛ سأعرض مراجعتي بعد إنهاء الجلسة.";
     $("#transcript").textContent = "";
     $("#recitationPanel").hidden = false;
     renderVerses();
@@ -166,27 +250,105 @@ async function begin() {
   }
 }
 
-function stop() {
+async function stop() {
+  const wasActive = active;
   active = false;
   processor?.disconnect(); processor = null;
   gain?.disconnect(); gain = null;
   stream?.getTracks().forEach((track) => track.stop()); stream = null;
   if (context) { context.close().catch(() => {}); context = null; }
   stopButton.disabled = true;
-  startButton.disabled = false;
-  if (session) audioQueue = audioQueue.then(() => session.stop()).catch(() => {});
-  status.textContent = "انتهى التسميع. يمكنك مراجعة النص والتقدير الصوتي.";
+  if (!wasActive) { startButton.disabled = false; return; }
+  startButton.disabled = true;
+  status.textContent = "انتهت القراءة؛ أجهّز مراجعة الأخطاء المحتملة…";
+  try {
+    await audioQueue;
+    if (session) await session.stop();
+    renderReview();
+    status.textContent = "اكتملت مراجعة التلاوة.";
+  } catch (error) {
+    feedback.textContent = `انتهى التسجيل، لكن تعذر إعداد المراجعة: ${error.message}`;
+    status.textContent = "تعذرت مراجعة هذه الجلسة.";
+  } finally {
+    startButton.disabled = false;
+  }
 }
 
 startButton.addEventListener("click", begin);
 stopButton.addEventListener("click", stop);
-$("#listenButton").addEventListener("click", () => {
-  const text = (juz.get(Number(surahSelect.value)) || []).find((v) => v.number === Number(ayahSelect.value))?.text;
-  if (!text || !window.speechSynthesis) { setupMessage.textContent = "القراءة الصوتية غير متاحة في هذا الجهاز."; return; }
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = "ar-SA";
-  speechSynthesis.cancel(); speechSynthesis.speak(utterance);
-  setupMessage.textContent = "يقرأ الجهاز نص الآية بصوت عربي آلي؛ ويمكنك الاستماع إلى قارئ من ملفاتك المحلية.";
+const listenButton = $("#listenButton");
+const listenLabel = $("#listenLabel");
+
+function updateListenLabel(label, icon = "▶") {
+  listenLabel.textContent = label;
+  listenButton.querySelector(".listen-icon").textContent = icon;
+}
+
+function stopAudioSequence() {
+  audioActive = false;
+  audioSequence = [];
+  audioSequenceIndex = 0;
+  audioPlayer.pause();
+  audioPlayer.removeAttribute("src");
+  audioPlayer.load();
+  updateListenLabel($("#playWholeSurah").checked ? "استمع للسورة" : "استمع للآية");
+}
+
+function playAudioSequenceItem() {
+  if (!audioActive || audioSequenceIndex >= audioSequence.length) {
+    audioActive = false;
+    updateListenLabel("اكتمل الاستماع");
+    setupMessage.textContent = "اكتمل الاستماع لتلاوة أحمد العجمي.";
+    return;
+  }
+  const { surah, ayah } = audioSequence[audioSequenceIndex];
+  const fileName = `${String(surah).padStart(3, "0")}${String(ayah).padStart(3, "0")}.mp3`;
+  audioPlayer.src = `https://everyayah.com/data/ahmed_ibn_ali_al_ajamy_128kbps/${fileName}`;
+  audioPlayer.load();
+  audioPlayer.play().catch(() => {
+    audioActive = false;
+    updateListenLabel("إعادة الاستماع");
+    setupMessage.textContent = "تعذر تشغيل التلاوة. تحقق من الإنترنت واضغط زر الاستماع مجددًا.";
+  });
+  if (audioSequence.length > 1) setupMessage.textContent = `تلاوة أحمد العجمي · الآية ${ar(ayah)} من سورة ${surahNames[surah - 78]}`;
+}
+
+audioPlayer.addEventListener("ended", () => {
+  if (!audioActive) return;
+  audioSequenceIndex += 1;
+  playAudioSequenceItem();
+});
+
+audioPlayer.addEventListener("error", () => {
+  if (!audioActive) return;
+  audioActive = false;
+  updateListenLabel("إعادة الاستماع");
+  setupMessage.textContent = "تعذر تحميل ملف التلاوة من EveryAyah. تحقق من اتصال الإنترنت.";
+});
+
+listenButton.addEventListener("click", () => {
+  if (audioActive) { stopAudioSequence(); setupMessage.textContent = "تم إيقاف الاستماع."; return; }
+  const surah = Number(surahSelect.value);
+  const ayah = Number(ayahSelect.value);
+  if (!juz.get(surah)?.some((verse) => verse.number === ayah)) {
+    setupMessage.textContent = "اختر السورة والآية أولاً.";
+    return;
+  }
+  const verses = juz.get(surah);
+  audioSequence = $("#playWholeSurah").checked
+    ? [{ surah, ayah: 0 }, ...verses.map((verse) => ({ surah, ayah: verse.number }))]
+    : [{ surah, ayah }];
+  audioSequenceIndex = 0;
+  audioActive = true;
+  audioPlayer.hidden = false;
+  updateListenLabel("إيقاف الاستماع", "■");
+  setupMessage.textContent = `تلاوة أحمد العجمي من EveryAyah؛ يلزم اتصال بالإنترنت.`;
+  playAudioSequenceItem();
+});
+
+$("#playWholeSurah").addEventListener("change", () => {
+  if (audioActive) stopAudioSequence();
+  updateListenLabel($("#playWholeSurah").checked ? "استمع للسورة" : "استمع للآية");
 });
 
 loadReference().catch((error) => { setupMessage.textContent = error.message; });

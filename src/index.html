@@ -19,15 +19,16 @@
       <section class="panel setup-panel">
         <div class="section-title"><div><span class="step-number">١</span><h2>حدّد موضع المراجعة</h2></div><span id="connectionBadge" class="status-badge"><i></i> محلي</span></div>
         <div class="form-grid"><label class="field"><span>السورة</span><select id="surahSelect"><option>جارٍ تحميل جزء عمّ…</option></select></label><label class="field"><span>ابدأ من الآية</span><select id="ayahSelect"></select></label></div>
-        <div class="session-options"><label class="toggle-row"><span><strong>إخفاء الآيات</strong><small>اختبر حفظك من غير عرض النص</small></span><input id="hideVerses" type="checkbox" checked /><i class="toggle"></i></label><div class="reciter-row"><span><strong>الاستماع</strong><small>يستخدم صوت الجهاز الآلي؛ خيار القارئ المسجّل قيد الإضافة</small></span><button id="listenButton" class="listen-button" type="button"><span class="listen-icon">▶</span> اقرأ الآية</button></div></div>
-        <div class="privacy-note"><span class="lock-icon">⌑</span><p><strong>خصوصية التلاوة</strong><br />لا تُرسل التلاوة إلى خادم أو خدمة خارجية. بعد تنزيل ملفات التطبيق والنموذج أول مرة، يعمل التصحيح على الجهاز. يتطلب الوصول للميكروفون HTTPS.</p></div>
+        <div class="session-options"><label class="toggle-row"><span><strong>إخفاء الآيات</strong><small>اختبر حفظك من غير عرض النص</small></span><input id="hideVerses" type="checkbox" checked /><i class="toggle"></i></label><label class="toggle-row"><span><strong>قراءة السورة كاملة</strong><small>ابدأ من أول السورة واستمع إليها متتابعة</small></span><input id="playWholeSurah" type="checkbox" /><i class="toggle"></i></label><div class="reciter-row"><span><strong>القارئ أحمد العجمي</strong><small>تلاوة الآية من <a href="https://everyayah.com/recitations_ayat.html" target="_blank" rel="noreferrer">EveryAyah</a> · تحتاج إنترنت</small></span><button id="listenButton" class="listen-button" type="button"><span class="listen-icon">▶</span> <span id="listenLabel">استمع للآية</span></button></div></div>
+        <audio id="audioPlayer" class="audio-player" controls preload="none" hidden style="width:100%;margin-top:10px"></audio>
+        <div class="privacy-note"><span class="lock-icon">⌑</span><p><strong>خصوصية التلاوة</strong><br />تصحيح صوتك يتم على الجهاز ولا يُرسل إلى خدمة خارجية. زر الاستماع يبث تلاوة أحمد العجمي من EveryAyah ويحتاج إنترنت. يتطلب الوصول للميكروفون HTTPS.</p></div>
         <button id="startButton" class="primary-button full" type="button"><span>ابدأ التسميع</span><span class="button-arrow">←</span></button><p id="setupMessage" class="inline-message" aria-live="polite"></p>
       </section>
       <section id="recitationPanel" class="panel recitation-panel" hidden>
         <div class="recitation-head"><div><p id="currentLocation" class="eyebrow">موضع التسميع</p><h2 id="currentSurahTitle">سورة النبأ</h2></div><button id="stopButton" class="stop-button" type="button" disabled><span class="stop-dot"></span> إنهاء الجلسة</button></div>
         <div class="live-strip"><span class="pulse"></span><span id="status">بانتظار بدء التلاوة…</span><span id="position" class="position-pill">الآية —</span></div>
         <div id="quranText" class="quran-text" aria-live="polite"></div>
-        <div class="feedback-box"><div class="feedback-icon">✦</div><div><strong>ملاحظات التسميع</strong><p id="feedback">ستظهر هنا مواضع التعرف والتنبيهات المحتملة.</p><small id="transcript"></small></div></div>
+        <div class="feedback-box"><div class="feedback-icon">✦</div><div><strong>مراجعة ما بعد التلاوة</strong><p id="feedback">سأستمع حتى تنهي القراءة، ثم أعرض ما تعرّف عليه النموذج والتنبيهات المحتملة.</p><ul id="reviewItems" class="review-items" hidden style="padding-right:18px;font-size:12px;line-height:1.9"></ul><small id="transcript"></small></div></div>
       </section>
       <footer><span>رفيق الحفظ</span><span>التعرف الصوتي آلي تقريبي، والتصحيح النهائي عند معلّم متقن.</span></footer>
     </main>
