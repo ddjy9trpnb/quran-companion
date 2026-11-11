@@ -1,0 +1,13 @@
+{
+  "name": "رفيق الحفظ — القرآن الكريم",
+  "short_name": "رفيق الحفظ",
+  "description": "مرافق شخصي للاستماع إلى التلاوة ومراجعة حفظ القرآن الكريم.",
+  "lang": "ar",
+  "dir": "rtl",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f6f1",
+  "theme_color": "#123b3b",
+  "icons": [{ "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
