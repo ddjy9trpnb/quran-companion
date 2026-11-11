@@ -29,6 +29,9 @@ let finalTranscript = "";
 let audioSequence = [];
 let audioSequenceIndex = 0;
 let audioActive = false;
+let reviewWarnings = [];
+let voiceRecognition = null;
+let voiceListening = false;
 
 const ar = (n) => Number(n).toLocaleString("ar");
 const surahNames = ["النبأ","النازعات","عبس","التكوير","الانفطار","المطففين","الانشقاق","البروج","الطارق","الأعلى","الغاشية","الفجر","البلد","الشمس","الليل","الضحى","الشرح","التين","العلق","القدر","البينة","الزلزلة","العاديات","القارعة","التكاثر","العصر","الهمزة","الفيل","قريش","الماعون","الكوثر","الكافرون","النصر","المسد","الإخلاص","الفلق","الناس"];
@@ -163,21 +166,131 @@ function renderReview() {
     }
   }
   const warnings = [...issues.map(issueLabel), ...[...new Set(inferredGaps)].map((ayah) => `احتمال عدم قراءة الآية ${ar(ayah)}؛ راجع التسلسل.`)];
+  reviewWarnings = warnings;
   if (warnings.length) {
-    $("#feedback").textContent = `انتهت القراءة. رصدت ${ar(warnings.length)} ملاحظة محتملة؛ راجعها بهدوء مع النص:`;
+    const speech = `انتهت القراءة. رصدت ${ar(warnings.length)} ملاحظة محتملة. ${warnings.join(". ")} تذكّر أن هذا تقدير آلي؛ أعد الآية بهدوء وقارنها بالمصحف أو اعرضها على معلّم متقن.`;
+    $("#feedback").textContent = "انتهت القراءة، اضغط «اسمع المراجعة» لأشرح لك الملاحظات صوتيًا.";
+    items.replaceChildren();
     for (const warning of warnings) { const li = document.createElement("li"); li.textContent = warning; items.append(li); }
-    items.hidden = false;
+    items.hidden = true;
+    window.quranReviewSpeech = speech;
   } else if (verses.length) {
-    $("#feedback").textContent = `انتهت القراءة. تعرّف النموذج على ${ar(verses.length)} آية، ولم يرصد تنبيهًا واضحًا. هذا تقدير آلي ولا يؤكد صحة كل كلمة أو أحكام التجويد.`;
+    $("#feedback").textContent = "انتهت القراءة. اضغط «اسمع المراجعة» لسماع النتيجة.";
     items.hidden = true;
+    window.quranReviewSpeech = `انتهت القراءة. تعرّف النموذج على ${ar(verses.length)} آية، ولم يرصد تنبيهًا واضحًا. هذا تقدير آلي ولا يؤكد صحة كل كلمة أو أحكام التجويد. أحسنت المواظبة، وواصل مراجعتك مع المصحف.`;
   } else {
-    $("#feedback").textContent = "انتهت القراءة، لكن النموذج لم يتعرف على آيات كافية لإعطاء مراجعة موثوقة. جرّب القراءة قريبًا من الميكروفون وبصوت أوضح.";
+    $("#feedback").textContent = "انتهت القراءة. اضغط «اسمع المراجعة» لمعرفة ما حدث.";
     items.hidden = true;
+    window.quranReviewSpeech = "انتهت القراءة، لكنني لم أتعرف على آيات كافية لأعطيك مراجعة موثوقة. جرّب مرة أخرى قريبًا من الميكروفون وبصوت أوضح.";
   }
-  $("#transcript").textContent = verses.length
-    ? `الآيات التي تعرف عليها النموذج: ${verses.map((item) => ar(item.ayah)).join("، ")}${finalTranscript ? `\nالتفريغ الصوتي التقريبي: ${finalTranscript}` : ""}`
-    : finalTranscript ? `التفريغ الصوتي التقريبي: ${finalTranscript}` : "";
+  $("#transcript").textContent = "";
+  $("#speakReviewButton").disabled = false;
+  speakText(window.quranReviewSpeech, false);
 }
+
+function speakText(text, updateStatus = true) {
+  if (!("speechSynthesis" in window)) {
+    if (updateStatus) $("#voiceStatus").textContent = "ميزة النطق غير متاحة في هذا المتصفح.";
+    return false;
+  }
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = "ar-SA";
+  utterance.rate = 0.9;
+  const arabicVoice = window.speechSynthesis.getVoices().find((voice) => voice.lang?.toLowerCase().startsWith("ar"));
+  if (arabicVoice) utterance.voice = arabicVoice;
+  utterance.onstart = () => { if (updateStatus) $("#voiceStatus").textContent = "أتحدث الآن…"; };
+  utterance.onend = () => { if (updateStatus) $("#voiceStatus").textContent = "انتهى الرد. يمكنك الضغط على زر التحدث للسؤال عن قراءتك."; };
+  utterance.onerror = () => { if (updateStatus) $("#voiceStatus").textContent = "تعذر تشغيل الصوت. تأكد من توفر صوت عربي في إعدادات الآيفون."; };
+  window.speechSynthesis.speak(utterance);
+  return true;
+}
+
+function buildVoiceAnswer(question) {
+  const query = question.replace(/[؟?!.,،؛]/gu, " ").trim();
+  const count = detectedVerses.length;
+  if (/خطأ|أخطأت|أخطائي|غلط|ملاحظ|صحح|تصحيح|كلمة|سقط/iu.test(query)) {
+    return reviewWarnings.length
+      ? `هذه الملاحظات التي رصدتها، وكلها احتمالات تحتاج مراجعة: ${reviewWarnings.join(". ")}. أعد قراءة المواضع بهدوء وقارنها بالمصحف.`
+      : count ? "لم أرصد تنبيهًا واضحًا في هذه الجلسة، لكن هذا لا يثبت أن كل كلمة أو حكم تجويد صحيح. راجع تلاوتك مع المصحف." : "لم أتعرف على آيات كافية حتى أحدد موضع خطأ. قرّب الهاتف وتحدث بوضوح ثم أعد التسميع.";
+  }
+  if (/كيف|شلون|أدائي|قراءتي|جيد|نتيج|تقيي/iu.test(query)) {
+    return count ? `تعرّفت على ${ar(count)} آية في هذه الجلسة${reviewWarnings.length ? ` ورصدت ${ar(reviewWarnings.length)} ملاحظة محتملة` : " ولم أرصد تنبيهًا واضحًا"}. تحليلي آلي تقريبي ولا يقيّم التجويد بدقة.` : "لم أتعرف على آيات كافية لأقيّم هذه الجلسة. جرّب أن تقرأ أقرب إلى الميكروفون.";
+  }
+  if (/أين|وين|توقفت|وصلت|آخر آية/iu.test(query)) {
+    const last = detectedVerses.at(-1)?.ayah;
+    return last ? `آخر آية تعرفت عليها هي الآية ${ar(last)} من سورة ${surahNames[Number(surahSelect.value) - 78]}.` : "لم أتمكن من تحديد موضع توقفك في هذه الجلسة.";
+  }
+  if (/السلام|مرحبا|أهل|شكرا|جزاك/iu.test(query)) return "وعليكم السلام. أنا رفيقك للتدرب على الحفظ. اسألني عن ملاحظات هذه الجلسة أو نتيجتها أو موضع توقفك.";
+  return "أستطيع مساعدتك في مراجعة ملاحظات هذه الجلسة، وملخص أدائك، وآخر آية تعرفت عليها. جرّب أن تسألني: ما ملاحظاتي؟ أو كيف كان أدائي؟";
+}
+
+async function startLocalVoiceChat() {
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!Recognition) {
+    $("#voiceStatus").textContent = "التحدث الصوتي غير مدعوم في هذا المتصفح. لم أرسل صوتك لأي خدمة. ما زال بإمكانك سماع ملخص التصحيح.";
+    return;
+  }
+  const recognition = new Recognition();
+  if (!("processLocally" in recognition) || typeof Recognition.available !== "function") {
+    $("#voiceStatus").textContent = "هذا Safari لا يوفّر تأكيدًا للتعرف الصوتي المحلي بالعربية؛ حفاظًا على خصوصيتك لم أبدأ الاستماع.";
+    return;
+  }
+  recognition.lang = "ar-SA";
+  recognition.continuous = false;
+  recognition.interimResults = false;
+  recognition.processLocally = true;
+  try {
+    let availability = await Recognition.available({ langs: ["ar-SA"], processLocally: true, quality: "dictation" });
+    if (availability === "downloadable" && typeof Recognition.install === "function") {
+      $("#voiceStatus").textContent = "يجري تنزيل حزمة التعرف العربية إلى الجهاز؛ لا يُرسل صوتك إلى خدمة خارجية…";
+      const installed = await Recognition.install({ langs: ["ar-SA"], processLocally: true, quality: "dictation" });
+      if (installed) {
+        $("#voiceStatus").textContent = "اكتمل تنزيل الحزمة إلى الجهاز. اضغط «تحدث عن قراءتك» مرة أخرى لبدء السؤال الصوتي.";
+        return;
+      }
+      availability = "unavailable";
+    }
+    if (availability !== "available") {
+      $("#voiceStatus").textContent = "حزمة التعرف الصوتي المحلي بالعربية غير متاحة على هذا الجهاز. لن أستخدم خدمة سحابية.";
+      return;
+    }
+  } catch {
+    $("#voiceStatus").textContent = "تعذر التحقق من دعم التعرف المحلي. لم أبدأ الاستماع حفاظًا على خصوصيتك.";
+    return;
+  }
+  voiceRecognition = recognition;
+  voiceListening = true;
+  $("#voiceChatButton").disabled = true;
+  $("#voiceStatus").textContent = "تحدث الآن عن قراءتك؛ الاستماع محلي على الجهاز.";
+  recognition.onresult = (event) => {
+    const question = event.results?.[0]?.[0]?.transcript?.trim();
+    if (!question) return;
+    $("#voiceHeard").textContent = `سمعت: ${question}`;
+    $("#voiceHeard").hidden = false;
+    speakText(buildVoiceAnswer(question));
+  };
+  recognition.onerror = (event) => { $("#voiceStatus").textContent = event.error === "not-allowed" ? "لم يُسمح بالميكروفون." : "تعذر فهم الكلام؛ جرّب مرة أخرى."; };
+  recognition.onend = () => {
+    voiceListening = false;
+    voiceRecognition = null;
+    $("#voiceChatButton").disabled = false;
+    $("#voiceChatButton").textContent = "🎙 تحدث عن قراءتك";
+  };
+  try { recognition.start(); } catch {
+    voiceListening = false;
+    voiceRecognition = null;
+    $("#voiceChatButton").disabled = false;
+    $("#voiceStatus").textContent = "تعذر بدء الميكروفون الصوتي.";
+  }
+}
+
+$("#speakReviewButton").addEventListener("click", () => speakText(window.quranReviewSpeech || "لم تكتمل المراجعة بعد."));
+$("#voiceChatButton").addEventListener("click", () => {
+  if (voiceListening) { voiceRecognition?.stop(); return; }
+  if (active) { $("#voiceStatus").textContent = "أنه التلاوة أولًا، ثم تحدث عن نتيجتها."; return; }
+  startLocalVoiceChat();
+});
 
 async function ensureModel() {
   if (session) return;
@@ -222,6 +335,11 @@ async function begin() {
     reviewIssueKeys = new Set();
     detectedVerses = [];
     finalTranscript = "";
+    reviewWarnings = [];
+    window.quranReviewSpeech = "";
+    $("#speakReviewButton").disabled = true;
+    $("#voiceHeard").hidden = true;
+    $("#voiceStatus").textContent = "بعد إنهاء القراءة يمكنك سماع المراجعة أو التحدث عن نتيجتك.";
     $("#reviewItems").replaceChildren();
     $("#reviewItems").hidden = true;
     feedback.textContent = "أقرأ الآن بصمت؛ سأعرض مراجعتي بعد إنهاء الجلسة.";
